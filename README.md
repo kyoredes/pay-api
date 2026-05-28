@@ -89,8 +89,8 @@ cp .env.example .env
 
 docker compose up postgres rabbitmq -d
 alembic upgrade head
-uvicorn app.main:app --reload --app-dir src
-python -m app.consumer_main
+uvicorn src.main:app --reload
+python -m src.consumer_main
 ```
 
 Переменные окружения — см. `.env.example`.
