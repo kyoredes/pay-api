@@ -5,17 +5,17 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 from src.domain.enums import PaymentStatus
-from src.infrastructure.database.repositories import SqlAlchemyPaymentRepository
+from src.infrastructure.database.repositories import (
+    SqlAlchemyPaymentRepository,
+    SqlAlchemyWebhookOutboxRepository,
+)
 from src.infrastructure.database.session import get_session_factory
-from src.infrastructure.webhooks.client import WebhookClient, WebhookPayload
+from src.infrastructure.messaging.exceptions import PaymentNotFoundError
 
 logger = logging.getLogger(__name__)
 
 
 class PaymentProcessor:
-    def __init__(self, webhook_client: WebhookClient) -> None:
-        self._webhooks = webhook_client
-
     async def process(self, payment_id: UUID) -> None:
         factory = get_session_factory()
 
@@ -24,8 +24,8 @@ class PaymentProcessor:
             payment = await repo.get_by_id(payment_id)
 
         if payment is None:
-            logger.error("payment %s not found, skipping", payment_id)
-            return
+            logger.error("payment %s not found", payment_id)
+            raise PaymentNotFoundError(payment_id)
 
         if payment.status != PaymentStatus.PENDING:
             logger.info(
@@ -42,6 +42,7 @@ class PaymentProcessor:
 
         async with factory() as session:
             repo = SqlAlchemyPaymentRepository(session)
+            webhook_outbox = SqlAlchemyWebhookOutboxRepository(session)
             payment = await repo.update_status(payment_id, status.value, processed_at)
             if not payment:
                 logger.info(
@@ -49,20 +50,18 @@ class PaymentProcessor:
                     payment_id,
                 )
                 return
-            await session.commit()
 
-        try:
-            await self._webhooks.deliver(
+            await webhook_outbox.enqueue(
+                payment.id,
                 payment.webhook_url,
-                WebhookPayload(
-                    payment_id=str(payment.id),
-                    status=payment.status.value,
-                    amount=str(payment.amount),
-                    currency=payment.currency.value,
-                    description=payment.description,
-                    metadata=payment.metadata,
-                    processed_at=processed_at.isoformat(),
-                ),
+                {
+                    "payment_id": str(payment.id),
+                    "status": payment.status.value,
+                    "amount": str(payment.amount),
+                    "currency": payment.currency.value,
+                    "description": payment.description,
+                    "metadata": payment.metadata,
+                    "processed_at": processed_at.isoformat(),
+                },
             )
-        except Exception:
-            logger.exception("webhook failed for payment %s", payment_id)
+            await session.commit()

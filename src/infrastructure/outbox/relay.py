@@ -2,7 +2,7 @@ import asyncio
 import logging
 
 from src.config import Settings
-from src.infrastructure.database.repositories import SqlAlchemyOutboxRepository
+from src.infrastructure.database.repositories import SqlAlchemyPaymentOutboxRepository
 from src.infrastructure.database.session import get_session_factory
 from src.infrastructure.messaging.publisher import PaymentEventPublisher
 
@@ -31,7 +31,7 @@ class OutboxRelay:
 
     async def _tick(self, factory) -> None:
         async with factory() as session:
-            outbox = SqlAlchemyOutboxRepository(session)
+            outbox = SqlAlchemyPaymentOutboxRepository(session)
             pending = await outbox.claim_pending(
                 self._settings.outbox_batch_size,
                 self._settings.outbox_claim_ttl,
@@ -44,13 +44,13 @@ class OutboxRelay:
             except Exception:
                 logger.exception("failed to publish outbox payload %s", payload.get("payment_id"))
                 async with factory() as session:
-                    outbox = SqlAlchemyOutboxRepository(session)
+                    outbox = SqlAlchemyPaymentOutboxRepository(session)
                     await outbox.release_claim(outbox_id)
                     await session.commit()
                 continue
 
             async with factory() as session:
-                outbox = SqlAlchemyOutboxRepository(session)
+                outbox = SqlAlchemyPaymentOutboxRepository(session)
                 await outbox.mark_processed(outbox_id)
                 await session.commit()
 

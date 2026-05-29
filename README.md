@@ -65,7 +65,7 @@ curl -s http://localhost:8000/api/v1/payments/{payment_id} \
 ## Архитектура
 
 ```
-src/app/
+src/
   domain/          сущности и enum
   application/     use-case и порты
   infrastructure/  БД, outbox relay, RabbitMQ, webhooks
@@ -74,9 +74,9 @@ src/app/
 
 Поток:
 
-1. `POST /payments` — запись в `payments` и `outbox` в одной транзакции.
+1. `POST /payments` — запись в `payments` и `payment_outbox` в одной транзакции.
 2. Outbox relay публикует событие в очередь `payments.new`.
-3. Consumer эмулирует шлюз (2–5 с, ~90% успех), обновляет статус, шлёт webhook с retry.
+3. Consumer эмулирует шлюз (2–5 с, ~90% успех), обновляет статус, шлёт webhook с retry и `webhook_outbox`.
 4. После 3 неудачных обработок сообщение уходит в DLQ `payments.new.dlq`.
 
 ## Локальная разработка

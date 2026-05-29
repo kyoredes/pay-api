@@ -4,10 +4,10 @@ from uuid import UUID, uuid4
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.application.repo import OutboxRepository, PaymentRepository
+from src.application.repo import PaymentOutboxRepository, PaymentRepository, WebhookOutboxEntry, WebhookOutboxRepository
 from src.domain.entities import Payment
 from src.domain.enums import Currency, PaymentStatus
-from src.infrastructure.database.models import OutboxModel, PaymentModel
+from src.infrastructure.database.models import PaymentOutboxModel, PaymentModel, WebhookOutboxModel
 
 
 def _to_entity(row: PaymentModel) -> Payment:
@@ -79,12 +79,12 @@ class SqlAlchemyPaymentRepository(PaymentRepository):
         return None
 
 
-class SqlAlchemyOutboxRepository(OutboxRepository):
+class SqlAlchemyPaymentOutboxRepository(PaymentOutboxRepository):
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
     async def enqueue(self, payment_id: UUID, payload: dict) -> None:
-        row = OutboxModel(
+        row = PaymentOutboxModel(
             id=uuid4(),
             payment_id=payment_id,
             event_type=payload.get("event", "payments.new"),
@@ -97,12 +97,12 @@ class SqlAlchemyOutboxRepository(OutboxRepository):
         now = datetime.now(timezone.utc)
         claim_expired_before = now - timedelta(seconds=claim_ttl_seconds)
         stmt = (
-            select(OutboxModel)
+            select(PaymentOutboxModel)
             .where(
-                OutboxModel.processed_at.is_(None),
-                (OutboxModel.claimed_at.is_(None)) | (OutboxModel.claimed_at < claim_expired_before),
+                PaymentOutboxModel.processed_at.is_(None),
+                (PaymentOutboxModel.claimed_at.is_(None)) | (PaymentOutboxModel.claimed_at < claim_expired_before),
             )
-            .order_by(OutboxModel.created_at)
+            .order_by(PaymentOutboxModel.created_at)
             .limit(limit)
             .with_for_update(skip_locked=True)
         )
@@ -115,8 +115,8 @@ class SqlAlchemyOutboxRepository(OutboxRepository):
 
     async def mark_processed(self, outbox_id: UUID) -> None:
         stmt = (
-            update(OutboxModel)
-            .where(OutboxModel.id == outbox_id)
+            update(PaymentOutboxModel)
+            .where(PaymentOutboxModel.id == outbox_id)
             .values(
                 processed_at=datetime.now(timezone.utc),
                 claimed_at=None,
@@ -127,8 +127,109 @@ class SqlAlchemyOutboxRepository(OutboxRepository):
 
     async def release_claim(self, outbox_id: UUID) -> None:
         stmt = (
-            update(OutboxModel)
-            .where(OutboxModel.id == outbox_id)
+            update(PaymentOutboxModel)
+            .where(PaymentOutboxModel.id == outbox_id)
+            .values(claimed_at=None)
+        )
+        await self._session.execute(stmt)
+        await self._session.flush()
+
+
+class SqlAlchemyWebhookOutboxRepository(WebhookOutboxRepository):
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def enqueue(self, payment_id: UUID, url: str, payload: dict) -> None:
+        row = WebhookOutboxModel(
+            id=uuid4(),
+            payment_id=payment_id,
+            url=url,
+            payload=payload,
+        )
+        self._session.add(row)
+        await self._session.flush()
+
+    async def claim_pending(self, limit: int, claim_ttl_seconds: float) -> list[WebhookOutboxEntry]:
+        now = datetime.now(timezone.utc)
+        claim_expired_before = now - timedelta(seconds=claim_ttl_seconds)
+        stmt = (
+            select(WebhookOutboxModel)
+            .where(
+                WebhookOutboxModel.delivered_at.is_(None),
+                WebhookOutboxModel.failed_at.is_(None),
+                (WebhookOutboxModel.next_attempt_at.is_(None))
+                | (WebhookOutboxModel.next_attempt_at <= now),
+                (WebhookOutboxModel.claimed_at.is_(None))
+                | (WebhookOutboxModel.claimed_at < claim_expired_before),
+            )
+            .order_by(WebhookOutboxModel.created_at)
+            .limit(limit)
+            .with_for_update(skip_locked=True)
+        )
+        result = await self._session.execute(stmt)
+        rows = result.scalars().all()
+        for row in rows:
+            row.claimed_at = now
+        await self._session.flush()
+        return [
+            WebhookOutboxEntry(
+                id=row.id,
+                url=row.url,
+                payload=row.payload,
+                attempts=row.attempts,
+            )
+            for row in rows
+        ]
+
+    async def mark_delivered(self, outbox_id: UUID) -> None:
+        stmt = (
+            update(WebhookOutboxModel)
+            .where(WebhookOutboxModel.id == outbox_id)
+            .values(
+                delivered_at=datetime.now(timezone.utc),
+                claimed_at=None,
+            )
+        )
+        await self._session.execute(stmt)
+        await self._session.flush()
+
+    async def mark_failed(self, outbox_id: UUID, error: str) -> None:
+        stmt = (
+            update(WebhookOutboxModel)
+            .where(WebhookOutboxModel.id == outbox_id)
+            .values(
+                failed_at=datetime.now(timezone.utc),
+                last_error=error,
+                claimed_at=None,
+            )
+        )
+        await self._session.execute(stmt)
+        await self._session.flush()
+
+    async def schedule_retry(
+        self,
+        outbox_id: UUID,
+        attempts: int,
+        next_attempt_at: datetime,
+        error: str,
+    ) -> None:
+        stmt = (
+            update(WebhookOutboxModel)
+            .where(WebhookOutboxModel.id == outbox_id)
+            .values(
+                attempts=attempts,
+                next_attempt_at=next_attempt_at,
+                last_error=error,
+                claimed_at=None,
+            )
+        )
+        await self._session.execute(stmt)
+        await self._session.flush()
+
+    async def release_claim(self, outbox_id: UUID) -> None:
+        stmt = (
+            update(WebhookOutboxModel)
+            .where(WebhookOutboxModel.id == outbox_id)
             .values(claimed_at=None)
         )
         await self._session.execute(stmt)

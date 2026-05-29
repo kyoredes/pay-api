@@ -1,3 +1,5 @@
+from uuid import UUID
+
 from pydantic import BaseModel
 from decimal import Decimal
 
@@ -10,3 +12,10 @@ class NewPayment(BaseModel):
     metadata: dict
     webhook_url: str
     idempotency_key: str
+
+
+class WebhookOutboxEntry(BaseModel):
+    id: UUID
+    url: str
+    payload: dict
+    attempts: int
