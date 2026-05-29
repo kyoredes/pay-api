@@ -3,16 +3,34 @@ from decimal import Decimal
 from uuid import UUID, uuid4
 
 from src.application.schemas import NewPayment
-from src.application.repo import OutboxRepository, PaymentRepository
+from src.application.repo import PaymentOutboxRepository, PaymentRepository
 from src.domain.entities import Payment
-from src.domain.enums import Currency, PaymentStatus
+from src.domain.enums import PaymentStatus
+
+
+class IdempotencyMismatchError(Exception):
+    pass
+
+
+def ensure_idempotent_match(existing: Payment, new_payment: NewPayment) -> None:
+    if (
+        existing.amount == new_payment.amount
+        and existing.currency == new_payment.currency
+        and existing.description == new_payment.description
+        and existing.metadata == new_payment.metadata
+        and existing.webhook_url == new_payment.webhook_url
+    ):
+        return
+    raise IdempotencyMismatchError(
+        "Idempotency-Key reused with different request parameters"
+    )
 
 
 class PaymentService:
     def __init__(
         self,
         payments: PaymentRepository,
-        outbox: OutboxRepository,
+        outbox: PaymentOutboxRepository,
     ) -> None:
         self._payments = payments
         self._outbox = outbox
@@ -20,6 +38,7 @@ class PaymentService:
     async def create(self, new_payment: NewPayment) -> tuple[Payment, bool]:
         existing = await self._payments.get_by_idempotency_key(new_payment.idempotency_key)
         if existing:
+            ensure_idempotent_match(existing, new_payment)
             return existing, False
 
         now = datetime.now(timezone.utc)
