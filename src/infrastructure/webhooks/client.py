@@ -5,9 +5,19 @@ from src.infrastructure.webhooks.schemas import WebhookPayload
 
 class WebhookClient:
     def __init__(self, timeout: float = 10.0) -> None:
-        self._client = httpx.AsyncClient(timeout=timeout)
+        self._timeout = timeout
+        self._client: httpx.AsyncClient | None = None
+
+    async def startup(self) -> None:
+        if self._client is None:
+            self._client = httpx.AsyncClient(timeout=self._timeout)
 
     async def deliver(self, url: str, payload: WebhookPayload) -> None:
+        if self._client is None:
+            raise RuntimeError(
+                "WebhookClient is not started; call startup() before deliver()"
+            )
+
         body = {
             "payment_id": payload.payment_id,
             "status": payload.status,
@@ -30,4 +40,6 @@ class WebhookClient:
         )
 
     async def close(self) -> None:
-        await self._client.aclose()
+        if self._client is not None:
+            await self._client.aclose()
+            self._client = None

@@ -13,6 +13,7 @@ app = FastStream(broker)
 async def startup() -> None:
     settings = get_settings()
     init_db(settings.database_url)
+    await webhook_client.startup()
 
 
 @app.on_shutdown
