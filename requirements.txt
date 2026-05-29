@@ -6,5 +6,4 @@ sqlalchemy[asyncio]==2.0.36
 asyncpg==0.30.0
 alembic==1.14.0
 faststream[rabbit]==0.5.34
-aiohttp==3.11.11
 httpx==0.28.1

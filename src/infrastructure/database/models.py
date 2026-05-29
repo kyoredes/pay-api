@@ -46,19 +46,12 @@ class PaymentOutboxModel(Base):
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
-class WebhookOutboxModel(Base):
-    __tablename__ = "webhook_outbox"
+class DeadLetterModel(Base):
+    __tablename__ = "dead_letters"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    payment_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, unique=True)
-    url: Mapped[str] = mapped_column(Text, nullable=False)
+    payment_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)
     payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
-    attempts: Mapped[int] = mapped_column(nullable=False, default=0)
-    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    failed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    last_error: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

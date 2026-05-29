@@ -138,8 +138,6 @@ async def test_create_rejects_same_key_with_different_params():
     logger.info("test_create_rejects_same_key_with_different_params PASSED")
 
 
-# --- Integration tests: real HTTP request to a running API ---
-
 API_BASE_URL = os.getenv("PAY_API_URL", "http://localhost:8000")
 API_KEY = os.getenv("API_KEY", "dev-api-key-change-me")
 

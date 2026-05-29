@@ -6,12 +6,20 @@ from faststream.rabbit import ExchangeType, RabbitBroker, RabbitExchange, Rabbit
 
 from src.config import get_settings
 from src.infrastructure.messaging.broker import create_broker
-from src.infrastructure.messaging.processor import PaymentNotFoundError, PaymentProcessor
+from src.infrastructure.messaging.dead_letter import DeadLetterArchiver
+from src.infrastructure.messaging.exceptions import (
+    PaymentNotFoundError,
+    WebhookDeliveryError,
+)
+from src.infrastructure.messaging.processor import PaymentProcessor
+from src.infrastructure.webhooks.client import WebhookClient
 
 logger = logging.getLogger(__name__)
 
 settings = get_settings()
 broker = create_broker(settings)
+
+webhook_client = WebhookClient()
 
 main_exchange = RabbitExchange(
     settings.payments_exchange,
@@ -41,7 +49,8 @@ dlq = RabbitQueue(
     routing_key=settings.payments_dlq,
 )
 
-processor = PaymentProcessor()
+processor = PaymentProcessor(webhook_client, settings)
+dead_letter_archiver = DeadLetterArchiver()
 
 
 @broker.subscriber(
@@ -61,8 +70,14 @@ async def handle_payment_new(message: dict) -> None:
     except PaymentNotFoundError as exc:
         logger.error("payment %s not found, rejecting to DLQ", exc.payment_id)
         raise RejectMessage() from exc
+    except WebhookDeliveryError as exc:
+        logger.error(
+            "webhook delivery for payment %s failed after retries, rejecting to DLQ",
+            exc.payment_id,
+        )
+        raise RejectMessage() from exc
 
 
-@broker.subscriber(dlq, exchange=dlx_exchange)
+@broker.subscriber(dlq, exchange=dlx_exchange, retry=True)
 async def handle_dead_letter(message: dict) -> None:
-    logger.error("dead letter received: payment_id=%s message=%s", message.get("payment_id"), message)
+    await dead_letter_archiver.archive(message)
